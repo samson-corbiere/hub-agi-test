@@ -1,7 +1,10 @@
 """PUT /sessions/{session_id}/files/{name}: receive a session file (docs/api-contract.md)."""
 
 import hashlib
+import time
+import uuid
 
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -339,3 +342,140 @@ def test_size_limit_is_checked_before_already_received(
     assert response.status_code == 413
     assert file_row(db, "imu.csv") == row_before
     assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/imu.csv": body}
+
+
+# --- Streaming, over a real HTTP server (see the live_server fixture) ---
+
+CHUNK = 64 * 1024
+
+
+def big_body(size: int) -> bytes:
+    return bytes(range(256)) * (size // 256)
+
+
+def register_with_video(base_url, example_meta, video: bytes) -> str:
+    """Register a new session whose video.mp4 is `video`; returns its id."""
+    session_id = str(uuid.uuid4())
+    files = [
+        {"name": "video.mp4", "size": len(video), "sha256": sha256(video)}
+        if f["name"] == "video.mp4"
+        else f
+        for f in example_meta["files"]
+    ]
+    meta = {**example_meta, "session_id": session_id, "files": files}
+    response = httpx2.post(f"{base_url}/sessions", json=meta)
+    assert response.status_code == 201
+    return session_id
+
+
+def wait_until(condition, timeout=10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def bytes_being_received(session_dir) -> int:
+    """Total size of the temporary files the server is writing in session_dir."""
+    if not session_dir.exists():
+        return 0
+    return sum(p.stat().st_size for p in session_dir.iterdir() if p.name != "video.mp4")
+
+
+def test_body_is_written_to_disk_while_it_is_still_arriving(
+    live_server, db, data_dir, example_meta
+):
+    # The client stops after sending half of the body and waits to see those bytes on
+    # disk before sending the rest. A server that read the whole body before writing it
+    # would never get there: the second half doesn't exist yet.
+    base_url = live_server()
+    body = big_body(4 * 1024 * 1024)
+    session_id = register_with_video(base_url, example_meta, body)
+    session_dir = data_dir / "sessions" / session_id
+    half = len(body) // 2
+    seen_on_disk = []
+
+    def chunks():
+        for start in range(0, half, CHUNK):
+            yield body[start : start + CHUNK]
+        assert wait_until(lambda: bytes_being_received(session_dir) >= half - CHUNK), (
+            "the first half of the body never reached the disk"
+        )
+        seen_on_disk.append(bytes_being_received(session_dir))
+        for start in range(half, len(body), CHUNK):
+            yield body[start : start + CHUNK]
+
+    response = httpx2.put(
+        f"{base_url}/sessions/{session_id}/files/video.mp4",
+        content=chunks(),
+        headers={"X-Content-SHA256": sha256(body)},
+        timeout=30,
+    )
+
+    assert response.status_code == 201
+    assert half - CHUNK <= seen_on_disk[0] < len(body)
+    assert file_row(db, "video.mp4", session_id)["status"] == "received"
+    assert stored_files(data_dir) == {f"sessions/{session_id}/video.mp4": body}
+
+
+def test_endless_body_is_cut_off_at_the_limit(live_server, db, data_dir, registered_live):
+    # A body with no Content-Length and no end: the server must stop reading it once it
+    # passes the limit, instead of reading (or holding) it whole.
+    base_url, session_id = registered_live(max_file_size=1024 * 1024)
+    sent = 0
+    give_up = 256 * 1024 * 1024
+
+    def endless():
+        nonlocal sent
+        chunk = b"\0" * CHUNK
+        while sent < give_up:
+            sent += len(chunk)
+            yield chunk
+
+    response = httpx2.put(
+        f"{base_url}/sessions/{session_id}/files/video.mp4",
+        content=endless(),
+        headers={"X-Content-SHA256": "0" * 64},
+        timeout=30,
+    )
+
+    assert response.status_code == 413
+    assert sent < give_up // 4
+    assert file_row(db, "video.mp4", session_id)["status"] == "expected"
+    assert wait_until(lambda: stored_files(data_dir) == {})
+
+
+def test_interrupted_upload_leaves_nothing_on_disk(live_server, db, data_dir, registered_live):
+    base_url, session_id = registered_live()
+    session_dir = data_dir / "sessions" / session_id
+
+    def interrupted():
+        yield b"\0" * CHUNK
+        assert wait_until(lambda: bytes_being_received(session_dir) > 0)
+        raise ConnectionAbortedError("the app was killed mid-upload")
+
+    with pytest.raises(ConnectionAbortedError):
+        httpx2.put(
+            f"{base_url}/sessions/{session_id}/files/video.mp4",
+            content=interrupted(),
+            headers={"X-Content-SHA256": "0" * 64},
+            timeout=30,
+        )
+
+    assert wait_until(lambda: stored_files(data_dir) == {}), stored_files(data_dir).keys()
+    assert file_row(db, "video.mp4", session_id)["status"] == "expected"
+
+
+@pytest.fixture
+def registered_live(live_server, example_meta):
+    """Start a live server and register the example session on it."""
+
+    def start(**options):
+        base_url = live_server(**options)
+        response = httpx2.post(f"{base_url}/sessions", json=example_meta)
+        assert response.status_code == 201
+        return base_url, EXAMPLE_ID
+
+    return start
