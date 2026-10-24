@@ -7,22 +7,19 @@ exercise the real schema. Every test then starts from empty tables.
 
 import json
 import os
-from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from dotenv import load_dotenv
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, make_url, text
 
+# Importing capturekit.config also loads the repo-root .env, for TEST_DATABASE_URL.
 from capturekit.app import create_app
+from capturekit.config import REPO_DIR
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
-REPO_DIR = BACKEND_DIR.parent
+BACKEND_DIR = REPO_DIR / "backend"
 EXAMPLE_DIR = REPO_DIR / "contract" / "example-session"
-
-load_dotenv(REPO_DIR / ".env")
 
 
 def _test_database_url() -> str:

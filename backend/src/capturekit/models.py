@@ -1,7 +1,12 @@
-"""ORM mapping of the tables created by the Alembic migrations (the schema's source of truth)."""
+"""ORM mapping of the tables created by the Alembic migrations.
+
+The migrations create the schema; tests/test_migrations.py checks these models still
+match it.
+"""
 
 import uuid
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, Text, func
@@ -9,11 +14,17 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
+class FileStatus(StrEnum):
+    EXPECTED = "expected"
+    RECEIVED = "received"
+    CORRUPT = "corrupt"
+
+
 class Base(DeclarativeBase):
     pass
 
 
-class Session(Base):
+class CaptureSession(Base):
     __tablename__ = "sessions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -37,7 +48,8 @@ class SessionFile(Base):
     __tablename__ = "session_files"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('expected', 'received', 'corrupt')", name="ck_session_files_status"
+            "status IN ({})".format(", ".join(f"'{status}'" for status in FileStatus)),
+            name="ck_session_files_status",
         ),
     )
 
@@ -47,7 +59,7 @@ class SessionFile(Base):
     name: Mapped[str] = mapped_column(Text, primary_key=True)
     size: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64))
-    status: Mapped[str] = mapped_column(Text, server_default="expected")
+    status: Mapped[FileStatus] = mapped_column(Text, server_default=FileStatus.EXPECTED)
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    session: Mapped[Session] = relationship(back_populates="files")
+    session: Mapped[CaptureSession] = relationship(back_populates="files")

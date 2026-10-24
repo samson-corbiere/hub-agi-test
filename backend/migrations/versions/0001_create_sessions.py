@@ -47,6 +47,8 @@ def upgrade() -> None:
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("size", sa.BigInteger(), nullable=False),
         sa.Column("sha256", sa.String(64), nullable=False),
+        # Values of capturekit.models.FileStatus, spelled out on purpose: a migration is a
+        # frozen snapshot and must not change when application code does.
         sa.Column("status", sa.Text(), nullable=False, server_default="expected"),
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("session_id", "name", name="pk_session_files"),

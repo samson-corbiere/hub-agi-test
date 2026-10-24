@@ -2,18 +2,17 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Literal
 
 from pydantic import BaseModel
 
-from capturekit.models import Session, SessionFile
+from capturekit.models import CaptureSession, FileStatus, SessionFile
 
 
 class FileOut(BaseModel):
     name: str
     size: int
     sha256: str
-    status: Literal["expected", "received", "corrupt"]
+    status: FileStatus
     received_at: datetime | None
 
     @classmethod
@@ -39,9 +38,9 @@ class SessionOut(BaseModel):
     complete: bool
 
     @classmethod
-    def from_model(cls, session: Session) -> "SessionOut":
+    def from_model(cls, session: CaptureSession) -> "SessionOut":
         files = [FileOut.from_model(f) for f in session.files]
-        received = sum(1 for f in files if f.status == "received")
+        received = sum(1 for f in files if f.status == FileStatus.RECEIVED)
         meta = session.meta
         return cls(
             id=session.id,

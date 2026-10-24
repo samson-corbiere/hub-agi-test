@@ -11,12 +11,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import cast, create_engine, insert, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session as DbSession
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from capturekit import config
 from capturekit.meta import InvalidMeta, describe_location, validate_meta
-from capturekit.models import Session, SessionFile
+from capturekit.models import CaptureSession, FileStatus, SessionFile
 from capturekit.schemas import SessionOut
 
 
@@ -55,11 +54,11 @@ def create_app(database_url: str | None = None) -> FastAPI:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    def get_db() -> Iterator[DbSession]:
+    def get_db() -> Iterator[Session]:
         with make_db_session() as db:
             yield db
 
-    Db = Annotated[DbSession, Depends(get_db)]
+    Db = Annotated[Session, Depends(get_db)]
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -81,7 +80,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         # ON CONFLICT makes concurrent replays safe: only one request inserts, the
         # others wait for it and then see the committed row.
         inserted = db.execute(
-            pg_insert(Session)
+            pg_insert(CaptureSession)
             .values(
                 id=session_id,
                 platform=meta["platform"],
@@ -89,15 +88,17 @@ def create_app(database_url: str | None = None) -> FastAPI:
                 os_version=meta["os_version"],
                 meta=meta,
             )
-            .on_conflict_do_nothing(index_elements=[Session.id])
-            .returning(Session.id)
+            .on_conflict_do_nothing(index_elements=[CaptureSession.id])
+            .returning(CaptureSession.id)
         ).scalar_one_or_none()
 
         if inserted is None:
             # Compare jsonb to jsonb in Postgres: both sides get the same number
             # normalisation, so the comparison is exact for anything jsonb can store.
             identical = db.scalar(
-                select(Session.meta == cast(meta, JSONB)).where(Session.id == session_id)
+                select(CaptureSession.meta == cast(meta, JSONB)).where(
+                    CaptureSession.id == session_id
+                )
             )
             if not identical:
                 raise HTTPException(
@@ -114,14 +115,14 @@ def create_app(database_url: str | None = None) -> FastAPI:
                         "name": f["name"],
                         "size": f["size"],
                         "sha256": f["sha256"],
-                        "status": "expected",
+                        "status": FileStatus.EXPECTED,
                     }
                     for f in meta["files"]
                 ],
             )
             db.commit()
 
-        session = db.get_one(Session, session_id)
+        session = db.get_one(CaptureSession, session_id)
         return SessionOut.from_model(session)
 
     return app
