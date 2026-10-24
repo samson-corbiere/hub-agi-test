@@ -1,13 +1,13 @@
 Pod::Spec.new do |s|
   s.name           = 'Capture'
-  s.version        = '1.0.0'
-  s.summary        = 'A sample project summary'
-  s.description    = 'A sample project description'
+  s.version        = '0.1.0'
+  s.summary        = 'CaptureKit native capture module'
+  s.description    = 'Camera preview, capture, storage and upload for CaptureKit, exposed to React Native.'
   s.author         = ''
-  s.homepage       = 'https://docs.expo.dev/modules/'
+  s.license        = 'MIT'
+  s.homepage       = 'https://github.com/samson-corbiere/hub-agi-test'
   s.platforms      = {
-    :ios => '16.4',
-    :tvos => '16.4'
+    :ios => '17.0'
   }
   s.source         = { git: '' }
   s.static_framework = true
@@ -19,5 +19,10 @@ Pod::Spec.new do |s|
     'DEFINES_MODULE' => 'YES',
   }
 
-  s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
+  # The Expo shell (this folder) plus the pure CaptureCore sources, compiled into one
+  # module. CaptureCore's Package.swift and Tests are for `swift test` only.
+  s.source_files = [
+    '*.swift',
+    'CaptureCore/Sources/CaptureCore/**/*.swift'
+  ]
 end
