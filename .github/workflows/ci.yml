@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: capturekit
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: capturekit_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U capturekit -d capturekit_test"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://capturekit:ci-only@localhost:5432/capturekit_test
+      DATA_DIR: /tmp/capturekit-data
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check . ../contract
+      - run: uv run ruff format --check . ../contract
+      - run: uv run pytest
+
+  capture-core:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app/modules/capture/ios/CaptureCore
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test

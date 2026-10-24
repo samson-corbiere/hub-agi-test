@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/samson-corbiere/hub-agi-test/contract/meta.schema.json",
+  "title": "CaptureKit session metadata (meta.json)",
+  "description": "Describes one capture session. All *_t_ns timestamps are nanoseconds on the device's monotonic host clock (time since boot), shared by video frames and IMU samples.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "platform",
+    "device_model",
+    "os_version",
+    "fps",
+    "resolution",
+    "camera_intrinsics",
+    "video_start_t_ns",
+    "video_end_t_ns",
+    "frame_count",
+    "imu_start_t_ns",
+    "imu_end_t_ns",
+    "imu_rate_hz",
+    "imu_sample_count",
+    "interrupted",
+    "files"
+  ],
+  "properties": {
+    "session_id": {
+      "description": "UUID v4 generated on the device when recording starts.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "platform": { "type": "string", "enum": ["ios"] },
+    "device_model": {
+      "description": "Hardware identifier, e.g. iPhone16,1.",
+      "type": "string",
+      "minLength": 1
+    },
+    "os_version": { "type": "string", "minLength": 1 },
+    "fps": { "description": "Nominal locked frame rate.", "type": "integer", "minimum": 1 },
+    "resolution": {
+      "description": "Encoded video size in pixels, as stored in the file (portrait: width < height).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "camera_intrinsics": {
+      "description": "3x3 camera intrinsic matrix K, row-major, in pixels of the reference resolution below. null when the device does not provide it (e.g. the fake capture source).",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["matrix", "reference_width", "reference_height"],
+          "properties": {
+            "matrix": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": { "type": "number" }
+              }
+            },
+            "reference_width": { "type": "integer", "minimum": 1 },
+            "reference_height": { "type": "integer", "minimum": 1 }
+          }
+        }
+      ]
+    },
+    "video_start_t_ns": { "description": "Timestamp of the first written frame.", "type": "integer", "minimum": 0 },
+    "video_end_t_ns": { "description": "Timestamp of the last written frame.", "type": "integer", "minimum": 0 },
+    "frame_count": { "description": "Rows in frames.csv.", "type": "integer", "minimum": 1 },
+    "imu_start_t_ns": { "description": "Timestamp of the first IMU sample; earlier than video_start_t_ns.", "type": "integer", "minimum": 0 },
+    "imu_end_t_ns": { "description": "Timestamp of the last IMU sample; later than video_end_t_ns.", "type": "integer", "minimum": 0 },
+    "imu_rate_hz": { "description": "Requested IMU rate.", "type": "number", "exclusiveMinimum": 0 },
+    "imu_sample_count": { "description": "Rows in imu.csv.", "type": "integer", "minimum": 1 },
+    "interrupted": {
+      "description": "true when recording ended because of an interruption (app backgrounded, phone call, low storage) rather than Stop or the duration cap.",
+      "type": "boolean"
+    },
+    "files": {
+      "description": "Every file the server must receive for this session. meta.json itself is sent as the POST /sessions body and is not listed.",
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "size", "sha256"],
+        "properties": {
+          "name": { "type": "string", "enum": ["video.mp4", "imu.csv", "frames.csv"] },
+          "size": { "description": "Bytes.", "type": "integer", "minimum": 0 },
+          "sha256": { "description": "Lowercase hex SHA-256 of the file.", "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    }
+  }
+}

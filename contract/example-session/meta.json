@@ -1,0 +1,57 @@
+{
+  "session_id": "3f1c2a4e-8b7d-4c6a-9e2f-1a2b3c4d5e6f",
+  "platform": "ios",
+  "device_model": "iPhone16,1",
+  "os_version": "26.1",
+  "fps": 30,
+  "resolution": {
+    "width": 1080,
+    "height": 1920
+  },
+  "camera_intrinsics": {
+    "matrix": [
+      [
+        1480.5,
+        0.0,
+        539.5
+      ],
+      [
+        0.0,
+        1480.5,
+        959.5
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "reference_width": 1080,
+    "reference_height": 1920
+  },
+  "video_start_t_ns": 5000123456789,
+  "video_end_t_ns": 5001090123446,
+  "frame_count": 30,
+  "imu_start_t_ns": 5000073456789,
+  "imu_end_t_ns": 5001133456789,
+  "imu_rate_hz": 100,
+  "imu_sample_count": 107,
+  "interrupted": false,
+  "files": [
+    {
+      "name": "video.mp4",
+      "size": 45366,
+      "sha256": "e1228611302cf5a9d1b903764f6dddb287da7597de4de903929c814d885e1c51"
+    },
+    {
+      "name": "imu.csv",
+      "size": 7462,
+      "sha256": "e6877f3da50f05ed3807afc68ee413f7847fde736f8e444b9abfa42bb05e20d6"
+    },
+    {
+      "name": "frames.csv",
+      "size": 517,
+      "sha256": "f95bef645e275b209cbb27b6db9b5a9a722ca400b2522d464383532aa09fd07f"
+    }
+  ]
+}
