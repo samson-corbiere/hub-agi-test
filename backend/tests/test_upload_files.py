@@ -141,3 +141,53 @@ def test_missing_or_malformed_hash_header_is_rejected(
     assert isinstance(response.json()["detail"], str)
     assert all_file_rows(db) == files_before
     assert stored_files(data_dir) == {}
+
+
+def damaged(body: bytes) -> bytes:
+    """The same bytes with the last one flipped, as a garbled transfer."""
+    return body[:-1] + bytes([body[-1] ^ 0xFF])
+
+
+def corrupt_upload(client, name, body):
+    """Upload bytes that don't match the header (the header is the real file's hash)."""
+    return put_file(client, name, damaged(body), sha=sha256(body))
+
+
+def test_body_not_matching_the_header_is_corrupt(client, db, data_dir, registered, example_files):
+    body = example_files["video.mp4"]
+
+    response = corrupt_upload(client, "video.mp4", body)
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+    row = file_row(db, "video.mp4")
+    assert row["status"] == "corrupt"
+    assert row["received_at"] is None
+    assert stored_files(data_dir) == {}
+
+
+def test_body_not_matching_the_declared_hash_is_corrupt(client, db, data_dir, registered):
+    # Self-consistent upload (header == body hash), but not the file meta.json declared.
+    other = b"frame_index,t_ns\n0,1\n"
+
+    response = put_file(client, "frames.csv", other)
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+    assert file_row(db, "frames.csv")["status"] == "corrupt"
+    assert stored_files(data_dir) == {}
+
+
+def test_corrupt_file_can_be_uploaded_again(client, db, data_dir, registered, example_files):
+    body = example_files["imu.csv"]
+    assert corrupt_upload(client, "imu.csv", body).status_code == 422
+
+    response = put_file(client, "imu.csv", body)
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "received"
+    row = file_row(db, "imu.csv")
+    assert row["status"] == "received"
+    assert row["size"] == len(body)
+    assert row["received_at"] is not None
+    assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/imu.csv": body}
