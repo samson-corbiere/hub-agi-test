@@ -191,3 +191,61 @@ def test_corrupt_file_can_be_uploaded_again(client, db, data_dir, registered, ex
     assert row["size"] == len(body)
     assert row["received_at"] is not None
     assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/imu.csv": body}
+
+
+def stored_path(data_dir, name, session_id=EXAMPLE_ID):
+    return data_dir / "sessions" / session_id / name
+
+
+def test_replaying_a_received_file_does_not_rewrite_it(
+    client, db, data_dir, registered, example_files
+):
+    body = example_files["video.mp4"]
+    first = put_file(client, "video.mp4", body)
+    assert first.status_code == 201
+    row_before = file_row(db, "video.mp4")
+    stat_before = stored_path(data_dir, "video.mp4").stat()
+
+    replay = put_file(client, "video.mp4", body)
+
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert file_row(db, "video.mp4") == row_before
+    stat_after = stored_path(data_dir, "video.mp4").stat()
+    assert (stat_after.st_ino, stat_after.st_mtime_ns) == (
+        stat_before.st_ino,
+        stat_before.st_mtime_ns,
+    )
+    assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/video.mp4": body}
+
+
+def test_different_content_for_a_received_file_is_a_conflict(
+    client, db, data_dir, registered, example_files
+):
+    body = example_files["frames.csv"]
+    assert put_file(client, "frames.csv", body).status_code == 201
+    row_before = file_row(db, "frames.csv")
+    stat_before = stored_path(data_dir, "frames.csv").stat()
+
+    response = put_file(client, "frames.csv", b"frame_index,t_ns\n0,1\n")
+
+    assert response.status_code == 409
+    assert isinstance(response.json()["detail"], str)
+    assert file_row(db, "frames.csv") == row_before
+    assert stored_path(data_dir, "frames.csv").stat().st_mtime_ns == stat_before.st_mtime_ns
+    assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/frames.csv": body}
+
+
+def test_garbled_replay_of_a_received_file_is_a_conflict(
+    client, db, data_dir, registered, example_files
+):
+    # Checks are ordered: "already received, hash differs" wins over "corrupt".
+    body = example_files["imu.csv"]
+    assert put_file(client, "imu.csv", body).status_code == 201
+    row_before = file_row(db, "imu.csv")
+
+    response = corrupt_upload(client, "imu.csv", body)
+
+    assert response.status_code == 409
+    assert file_row(db, "imu.csv") == row_before
+    assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/imu.csv": body}
