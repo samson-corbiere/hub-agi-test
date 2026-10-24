@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, Response, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Response, status
 from sqlalchemy import create_engine, insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session as DbSession
@@ -62,6 +62,12 @@ def create_app(database_url: str | None = None) -> FastAPI:
         ).scalar_one_or_none()
 
         if inserted is None:
+            existing = db.get_one(Session, session_id)
+            if existing.meta != meta:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    f"Session {session_id} is already registered with different metadata.",
+                )
             response.status_code = status.HTTP_200_OK
         else:
             db.execute(
