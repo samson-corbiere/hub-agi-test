@@ -129,9 +129,20 @@ def create_app(database_url: str | None = None, data_dir: Path | None = None) ->
         session = db.get_one(CaptureSession, session_id)
         return SessionOut.from_model(session)
 
-    def store_upload(session_id: uuid.UUID, name: str, upload: Upload) -> FileOut:
+    def store_upload(
+        session_id: uuid.UUID, name: str, header_sha256: str, upload: Upload
+    ) -> FileOut:
         with make_db_session() as db:
             file = db.get_one(SessionFile, (session_id, name))
+            if upload.sha256 != header_sha256 or upload.sha256 != file.sha256:
+                file.status = FileStatus.CORRUPT
+                db.commit()
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    f"{name} is corrupt: received SHA-256 {upload.sha256}, but the "
+                    f"X-Content-SHA256 header says {header_sha256} and meta.json "
+                    f"declares {file.sha256}.",
+                )
             upload.move_to(data_dir / "sessions" / str(session_id) / name)
             file.status = FileStatus.RECEIVED
             file.size = upload.size
@@ -159,8 +170,8 @@ def create_app(database_url: str | None = None, data_dir: Path | None = None) ->
                 f"{name!r} is not a session file; expected one of "
                 f"{', '.join(sorted(UPLOADED_FILE_NAMES))}.",
             )
-        declared_sha256 = request.headers.get("X-Content-SHA256")
-        if declared_sha256 is None or not SHA256_HEX.fullmatch(declared_sha256):
+        header_sha256 = request.headers.get("X-Content-SHA256")
+        if header_sha256 is None or not SHA256_HEX.fullmatch(header_sha256):
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
                 "X-Content-SHA256 must be the body's SHA-256 as 64 lowercase hex characters.",
@@ -168,7 +179,7 @@ def create_app(database_url: str | None = None, data_dir: Path | None = None) ->
 
         upload = await receive_upload(request, data_dir / "sessions" / str(sid), name)
         try:
-            return await run_in_threadpool(store_upload, sid, name, upload)
+            return await run_in_threadpool(store_upload, sid, name, header_sha256, upload)
         finally:
             upload.discard()
 
