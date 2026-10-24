@@ -34,8 +34,16 @@ class Upload:
         self.path.unlink(missing_ok=True)
 
 
-async def receive_upload(request: Request, directory: Path, name: str) -> Upload:
-    """Stream the request body into a temporary file in directory, chunk by chunk."""
+class BodyTooLarge(Exception):
+    """The body is larger than the size limit."""
+
+
+async def receive_upload(request: Request, directory: Path, name: str, max_size: int) -> Upload:
+    """Stream the request body into a temporary file in directory, chunk by chunk.
+
+    Only one chunk is held in memory at a time. Raises BodyTooLarge as soon as more than
+    max_size bytes have arrived. On any error the temporary file is removed.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     fd, temp = tempfile.mkstemp(dir=directory, prefix=f".{name}.", suffix=".part")
     path = Path(temp)
@@ -44,8 +52,10 @@ async def receive_upload(request: Request, directory: Path, name: str) -> Upload
     try:
         with os.fdopen(fd, "wb") as out:
             async for chunk in request.stream():
-                digest.update(chunk)
                 size += len(chunk)
+                if size > max_size:
+                    raise BodyTooLarge
+                digest.update(chunk)
                 out.write(chunk)
     except BaseException:
         path.unlink(missing_ok=True)

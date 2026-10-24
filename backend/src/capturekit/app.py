@@ -23,6 +23,7 @@ from capturekit.uploads import (
     MAX_FILE_SIZE,
     SHA256_HEX,
     UPLOADED_FILE_NAMES,
+    BodyTooLarge,
     Upload,
     receive_upload,
 )
@@ -209,8 +210,23 @@ def create_app(
                 status.HTTP_400_BAD_REQUEST,
                 "X-Content-SHA256 must be the body's SHA-256 as 64 lowercase hex characters.",
             )
+        too_large = HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"{name} is larger than the {max_file_size}-byte limit.",
+        )
+        content_length = request.headers.get("Content-Length")
+        if content_length is not None:
+            if not content_length.isdigit():
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid Content-Length.")
+            if int(content_length) > max_file_size:
+                raise too_large
 
-        upload = await receive_upload(request, data_dir / "sessions" / str(sid), name)
+        try:
+            upload = await receive_upload(
+                request, data_dir / "sessions" / str(sid), name, max_file_size
+            )
+        except BodyTooLarge:
+            raise too_large from None
         try:
             file, created = await run_in_threadpool(store_upload, sid, name, header_sha256, upload)
         finally:
