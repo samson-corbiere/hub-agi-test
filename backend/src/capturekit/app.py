@@ -221,7 +221,7 @@ def create_app(
         )
         content_length = request.headers.get("Content-Length")
         if content_length is not None:
-            if not content_length.isdigit():
+            if not (content_length.isascii() and content_length.isdigit()):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid Content-Length.")
             if int(content_length) > max_file_size:
                 raise too_large
