@@ -146,7 +146,9 @@ def create_app(
     ) -> tuple[FileOut, bool]:
         """Record the upload and move it into place. Returns (file, newly received)."""
         with make_db_session() as db:
-            file = db.get_one(SessionFile, (session_id, name))
+            # The row lock serialises concurrent uploads of the same file: the first one
+            # moves its file into place and commits, the others then see it received.
+            file = db.get_one(SessionFile, (session_id, name), with_for_update=True)
             if file.status == FileStatus.RECEIVED:
                 if upload.sha256 != file.sha256:
                     raise HTTPException(
