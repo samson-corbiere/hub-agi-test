@@ -4,4 +4,10 @@ from fastapi import FastAPI
 
 
 def create_app(database_url: str | None = None) -> FastAPI:
-    return FastAPI(title="CaptureKit ingest API")
+    app = FastAPI(title="CaptureKit ingest API")
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    return app
