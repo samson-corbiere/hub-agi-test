@@ -1,17 +1,20 @@
-"""The CaptureKit ingest API."""
+"""The CaptureKit ingest API (docs/api-contract.md)."""
 
 import uuid
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Response, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
 from capturekit import config
+from capturekit.meta import InvalidMeta, validate_meta
 from capturekit.models import Session, SessionFile
 from capturekit.schemas import SessionOut
 
@@ -27,6 +30,22 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
     app = FastAPI(title="CaptureKit ingest API", lifespan=lifespan)
 
+    # The contract's error shape is {"detail": "<human-readable reason>"}, also for 422.
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+        reasons = "; ".join(
+            f"{'/'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        return JSONResponse(
+            {"detail": f"Invalid request: {reasons}"},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+
+    @app.exception_handler(InvalidMeta)
+    async def invalid_meta(_: Request, exc: InvalidMeta) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+
     def get_db() -> Iterator[DbSession]:
         with make_db_session() as db:
             yield db
@@ -40,12 +59,16 @@ def create_app(database_url: str | None = None) -> FastAPI:
     @app.post(
         "/sessions",
         status_code=status.HTTP_201_CREATED,
-        responses={200: {"description": "Already registered with this exact metadata"}},
+        responses={
+            200: {"description": "Already registered with this exact metadata"},
+            409: {"description": "Already registered with different metadata"},
+            422: {"description": "Body is not a valid meta.json"},
+        },
     )
-    def register_session(
-        meta: Annotated[dict[str, Any], Body()], db: Db, response: Response
-    ) -> SessionOut:
+    def register_session(body: Annotated[Any, Body()], db: Db, response: Response) -> SessionOut:
+        meta = validate_meta(body)
         session_id = uuid.UUID(meta["session_id"])
+
         # ON CONFLICT makes concurrent replays safe: only one request inserts, the
         # others wait for it and then see the committed row.
         inserted = db.execute(
