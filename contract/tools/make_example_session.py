@@ -55,9 +55,9 @@ def imu_times(video_start: int, video_end: int) -> list[int]:
     return times
 
 
-def imu_row(t_ns: int, t0: int) -> list[str]:
+def imu_row(t_ns: int, imu_start_t_ns: int) -> list[str]:
     # Phone held upright and gently rotating about its vertical axis.
-    s = (t_ns - t0) / 1e9
+    s = (t_ns - imu_start_t_ns) / 1e9
     ax, ay, az = 0.05 * math.sin(2 * math.pi * s), -9.81, 0.02
     gx, gy, gz = 0.0, 0.5 * math.sin(2 * math.pi * 0.5 * s), 0.0
     return [str(t_ns)] + [f"{v:.6f}" for v in (ax, ay, az, gx, gy, gz)]

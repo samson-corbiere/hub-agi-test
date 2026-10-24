@@ -81,15 +81,19 @@
     "imu_rate_hz": { "description": "Requested IMU rate.", "type": "number", "exclusiveMinimum": 0 },
     "imu_sample_count": { "description": "Rows in imu.csv.", "type": "integer", "minimum": 1 },
     "interrupted": {
-      "description": "true when recording ended because of an interruption (app backgrounded, phone call, low storage) rather than Stop or the duration cap.",
+      "description": "true when the capture session was interrupted (app backgrounded, phone call, system interruption). false for Stop, the 10-minute cap and the clean low-storage stop.",
       "type": "boolean"
     },
     "files": {
-      "description": "Every file the server must receive for this session. meta.json itself is sent as the POST /sessions body and is not listed.",
+      "description": "Exactly one entry for each of video.mp4, imu.csv and frames.csv: every file the server must receive. meta.json itself is sent as the POST /sessions body and is not listed.",
       "type": "array",
       "minItems": 3,
       "maxItems": 3,
-      "uniqueItems": true,
+      "allOf": [
+        { "contains": { "properties": { "name": { "const": "video.mp4" } } } },
+        { "contains": { "properties": { "name": { "const": "imu.csv" } } } },
+        { "contains": { "properties": { "name": { "const": "frames.csv" } } } }
+      ],
       "items": {
         "type": "object",
         "additionalProperties": false,

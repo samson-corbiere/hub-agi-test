@@ -4,8 +4,8 @@
 !.env.example
 
 # Received session data (backend)
-backend/data/
-data/
+/backend/data/
+/data/
 
 # Python
 __pycache__/

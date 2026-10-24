@@ -2,6 +2,7 @@
 # Stop hook: before Claude ends a turn, verify the parts of the repo that changed.
 #   backend/ or contract/  -> ruff (lint + format) + pytest
 #   app/                   -> TypeScript check + `swift test` (CaptureCore) + iOS simulator build
+#   .claude/hooks/         -> this hook's own tests
 # Steps whose project doesn't exist yet are skipped.
 # On failure, exit 2: the output goes back to Claude and the turn can't end until it's fixed.
 # After 3 consecutive blocks in one session, the turn is allowed to end with a loud warning,
@@ -10,16 +11,22 @@ set -uo pipefail
 
 input=$(cat)
 session_id=$(jq -r '.session_id // "unknown"' <<<"$input")
+# false = Claude is ending a fresh turn (not one this hook already sent back), so the
+# block counter starts over.
+stop_hook_active=$(jq -r '.stop_hook_active // false' <<<"$input")
 root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 cd "$root" || exit 0
 
-# --- What changed: uncommitted work, plus commits on this branch since it left main ---
-changed=$(git status --porcelain --untracked-files=all | cut -c4-)
-branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-if [ -n "$branch" ] && [ "$branch" != "main" ] && git rev-parse --verify -q main >/dev/null; then
-  base=$(git merge-base HEAD main)
-  changed+=$'\n'$(git diff --name-only "$base" HEAD)
-fi
+# --- What changed: uncommitted work (staged, unstaged, untracked), plus commits not yet on
+# origin/main (or local main when there is no remote). Renames count as both paths;
+# quotePath=false keeps paths with spaces or accents unquoted so the patterns match.
+g() { git -c core.quotePath=false "$@"; }
+base=$(g merge-base HEAD origin/main 2>/dev/null || g merge-base HEAD main 2>/dev/null || true)
+changed=$(
+  g diff --name-only --no-renames HEAD 2>/dev/null
+  g ls-files --others --exclude-standard
+  if [ -n "$base" ]; then g diff --name-only --no-renames "$base" HEAD; fi
+)
 
 touched() { grep -qE "$1" <<<"$changed"; }
 
@@ -31,6 +38,11 @@ run() {
     failures+=$'\n'"### $label failed"$'\n'"$(tail -n 80 <<<"$out")"$'\n'
   fi
 }
+
+# --- The hook itself ---
+if touched '^\.claude/hooks/'; then
+  run "Stop hook tests" .claude/hooks/test_verify.sh
+fi
 
 # --- Backend + contract ---
 if touched '^(backend|contract)/' && [ -f backend/pyproject.toml ]; then
@@ -61,6 +73,7 @@ if touched '^app/'; then
 fi
 
 counter="${TMPDIR:-/tmp}/capturekit-stop-hook-${session_id}"
+[ "$stop_hook_active" = "true" ] || rm -f "$counter"
 if [ -z "$failures" ]; then
   rm -f "$counter"
   exit 0

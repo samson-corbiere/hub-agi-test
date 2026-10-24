@@ -50,23 +50,23 @@ Body: `meta.json` (validated against the schema).
 
 ### `PUT /sessions/{session_id}/files/{name}`
 
-Headers: `X-Content-SHA256: <lowercase hex>` (required), `Content-Length` (when known).
+Headers: `X-Content-SHA256: <lowercase hex SHA-256 of the body being sent>` (required), `Content-Length` (when known).
 Body: raw file bytes.
 
-The server streams the body to a temporary file while hashing it, never holding the whole file in memory. It moves the file into place atomically only when the computed hash equals both the header and the hash declared for that name in `meta.json`.
+The server streams the body to a temporary file while hashing it, never holding the whole file in memory. It moves the file into place atomically only when the computed hash equals both the `X-Content-SHA256` header and the hash declared for that name in `meta.json`.
 
-Checks are applied in this order:
+Checks are applied in this order. The first matching row wins:
 
 | Case | Response | File row after |
 |---|---|---|
 | `session_id` unknown | `404` | — |
-| `name` not one of `video.mp4`, `imu.csv`, `frames.csv`, or not declared in `meta.files` | `400` | — |
-| `X-Content-SHA256` missing or malformed, or differs from the declared hash | `400` | unchanged |
-| Body larger than 1 GiB (from `Content-Length`, or while streaming) | `413` | unchanged |
-| File already `received` and computed hash equals it | `200`, file not rewritten | `received` |
-| File already `received` and computed hash differs | `409`, stored file untouched | `received` |
-| Computed hash differs from the declared hash | `422`, nothing kept on disk | `corrupt` |
-| Computed hash matches | `201` | `received`, with `size` and `received_at` |
+| `name` not one of `video.mp4`, `imu.csv`, `frames.csv` | `400` | — |
+| `X-Content-SHA256` missing or not 64 lowercase hex characters | `400` | unchanged |
+| Body larger than 1 GB = 1 000 000 000 bytes (from `Content-Length`, or while streaming) | `413` | unchanged |
+| File already `received`, computed hash equals the stored hash | `200`, file not rewritten | `received` |
+| File already `received`, computed hash differs | `409`, stored file untouched | `received` |
+| Computed hash differs from the header or from the declared hash | `422`, nothing kept on disk | `corrupt` |
+| Computed hash equals both | `201` | `received`, with `size` and `received_at` |
 
 A `corrupt` file can be uploaded again; a matching upload turns it `received`.
 

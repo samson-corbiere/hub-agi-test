@@ -43,3 +43,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: swift test
+
+  stop-hook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: .claude/hooks/test_verify.sh

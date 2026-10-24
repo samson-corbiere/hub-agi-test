@@ -27,7 +27,7 @@ app/                     React Native (Expo dev build), UI only
     ios/CaptureCore/     Pure Swift package with all the logic, tested with `swift test`
 backend/                 FastAPI + SQLAlchemy + Alembic, pytest, ruff
 contract/                Shared JSON Schema + example session (owner-only)
-docs/                    API contract, ADRs, testing procedures
+docs/                    API contract (ADRs and testing procedures added as they come)
 infra/                   Docker Compose support files
 ```
 
@@ -59,6 +59,8 @@ App and API run instructions arrive with their tickets.
 - Authentication.
 - Separate raw accelerometer and gyroscope streams.
 - Full iOS build in CI.
+- A throttled server mode for demos.
+- Showing server-side session state in the app.
 
 ## License
 
