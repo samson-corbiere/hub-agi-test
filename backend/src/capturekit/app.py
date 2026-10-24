@@ -8,13 +8,14 @@ from typing import Annotated, Any
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine, insert
+from sqlalchemy import cast, create_engine, insert, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
 from capturekit import config
-from capturekit.meta import InvalidMeta, validate_meta
+from capturekit.meta import InvalidMeta, describe_location, validate_meta
 from capturekit.models import Session, SessionFile
 from capturekit.schemas import SessionOut
 
@@ -34,8 +35,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         reasons = "; ".join(
-            f"{'/'.join(str(part) for part in error['loc'])}: {error['msg']}"
-            for error in exc.errors()
+            f"{describe_location(error['loc'])}: {error['msg']}" for error in exc.errors()
         )
         return JSONResponse(
             {"detail": f"Invalid request: {reasons}"},
@@ -45,6 +45,15 @@ def create_app(database_url: str | None = None) -> FastAPI:
     @app.exception_handler(InvalidMeta)
     async def invalid_meta(_: Request, exc: InvalidMeta) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+    # Anything unexpected: still the contract's JSON shape. The exception is re-raised
+    # after this response is sent, so the server still logs the traceback.
+    @app.exception_handler(Exception)
+    async def unexpected_error(_: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(
+            {"detail": "Internal server error"},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     def get_db() -> Iterator[DbSession]:
         with make_db_session() as db:
@@ -85,8 +94,12 @@ def create_app(database_url: str | None = None) -> FastAPI:
         ).scalar_one_or_none()
 
         if inserted is None:
-            existing = db.get_one(Session, session_id)
-            if existing.meta != meta:
+            # Compare jsonb to jsonb in Postgres: both sides get the same number
+            # normalisation, so the comparison is exact for anything jsonb can store.
+            identical = db.scalar(
+                select(Session.meta == cast(meta, JSONB)).where(Session.id == session_id)
+            )
+            if not identical:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     f"Session {session_id} is already registered with different metadata.",
