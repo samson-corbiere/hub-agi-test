@@ -11,7 +11,7 @@ Spec: issue #1. Every product decision is settled there; read it before deciding
 ## Working rules
 
 - TDD, red first: write the test, run it, see it fail for the right reason, then make it pass.
-- Test through the seam, never internals: the HTTP API for `backend/`, the public API of `CaptureCore` (with fake `Transport` and `Clock`) for the app.
+- Drive tests through the seam: HTTP requests for `backend/` (then assert on the response, database rows and files on disk), the public API of `CaptureCore` (with fake `Transport` and `Clock`) for the app. Internal functions are never called directly from tests.
 - Logic goes in `CaptureCore` (pure Swift). Native glue (AVFoundation, CoreMotion, URLSession, Expo bridge) stays thin enough to need no logic tests.
 - A task is done only when the `Stop` hook's checks pass. Report failures as failures.
 - Repo artifacts (code, docs, issues, commits) are in English.
