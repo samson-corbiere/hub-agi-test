@@ -1,5 +1,6 @@
 """POST /sessions: register a session from its meta.json (docs/api-contract.md)."""
 
+import pytest
 from sqlalchemy import text
 
 EXAMPLE_ID = "3f1c2a4e-8b7d-4c6a-9e2f-1a2b3c4d5e6f"
@@ -80,3 +81,54 @@ def test_same_session_id_with_different_metadata_is_a_conflict(client, db, examp
     assert isinstance(response.json()["detail"], str)
     assert session_rows(db) == sessions_before
     assert file_rows(db) == files_before
+
+
+def without(meta, key):
+    return {k: v for k, v in meta.items() if k != key}
+
+
+def with_files(meta, files):
+    return {**meta, "files": files}
+
+
+INVALID_BODIES = {
+    "missing required field": lambda m: without(m, "video_start_t_ns"),
+    "unknown top-level field": lambda m: {**m, "extra": 1},
+    "wrong type": lambda m: {**m, "fps": "30"},
+    "session_id not a UUID v4": lambda m: {**m, "session_id": "not-a-uuid"},
+    "unknown platform": lambda m: {**m, "platform": "android"},
+    "unknown file name": lambda m: with_files(
+        m, [*m["files"][:2], {"name": "evil.sh", "size": 1, "sha256": "0" * 64}]
+    ),
+    "extra unknown file": lambda m: with_files(
+        m, [*m["files"], {"name": "evil.sh", "size": 1, "sha256": "0" * 64}]
+    ),
+    "path traversal in file name": lambda m: with_files(
+        m, [*m["files"][:2], {**m["files"][2], "name": "../frames.csv"}]
+    ),
+    "duplicate file name": lambda m: with_files(m, [m["files"][0]] * 3),
+    "missing file": lambda m: with_files(m, m["files"][:2]),
+    "bad sha256": lambda m: with_files(m, [{**m["files"][0], "sha256": "ABC"}, *m["files"][1:]]),
+    "negative size": lambda m: with_files(m, [{**m["files"][0], "size": -1}, *m["files"][1:]]),
+    "not an object": lambda m: [m],
+}
+
+
+@pytest.mark.parametrize("make_body", INVALID_BODIES.values(), ids=INVALID_BODIES.keys())
+def test_body_violating_the_schema_is_rejected(client, db, example_meta, make_body):
+    response = client.post("/sessions", json=make_body(example_meta))
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+    assert session_rows(db) == []
+    assert file_rows(db) == []
+
+
+def test_body_that_is_not_json_is_rejected(client, db):
+    response = client.post(
+        "/sessions", content=b"{not json", headers={"Content-Type": "application/json"}
+    )
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+    assert session_rows(db) == []
