@@ -53,3 +53,16 @@ def test_example_session_is_registered(client, db, example_meta):
         for f in sorted(example_meta["files"], key=lambda f: f["name"])
     ]
     assert all(f["status"] == "expected" and f["received_at"] is None for f in files)
+
+
+def test_replaying_the_same_registration_changes_nothing(client, db, example_meta):
+    first = client.post("/sessions", json=example_meta)
+    sessions_before = session_rows(db)
+    files_before = file_rows(db)
+
+    replay = client.post("/sessions", json=example_meta)
+
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert session_rows(db) == sessions_before
+    assert file_rows(db) == files_before
