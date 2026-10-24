@@ -1,9 +1,9 @@
 """The CaptureKit ingest API (docs/api-contract.md)."""
 
 import uuid
-from pathlib import Path
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, status
@@ -19,7 +19,7 @@ from capturekit import config
 from capturekit.meta import InvalidMeta, describe_location, validate_meta
 from capturekit.models import CaptureSession, FileStatus, SessionFile
 from capturekit.schemas import FileOut, SessionOut
-from capturekit.uploads import Upload, receive_upload
+from capturekit.uploads import SHA256_HEX, UPLOADED_FILE_NAMES, Upload, receive_upload
 
 
 def create_app(database_url: str | None = None, data_dir: Path | None = None) -> FastAPI:
@@ -140,12 +140,35 @@ def create_app(database_url: str | None = None, data_dir: Path | None = None) ->
             db.refresh(file)
             return FileOut.from_model(file)
 
+    def session_exists(session_id: uuid.UUID) -> bool:
+        with make_db_session() as db:
+            return db.get(CaptureSession, session_id) is not None
+
     @app.put("/sessions/{session_id}/files/{name}", status_code=status.HTTP_201_CREATED)
-    async def upload_file(session_id: uuid.UUID, name: str, request: Request) -> FileOut:
-        session_dir = data_dir / "sessions" / str(session_id)
-        upload = await receive_upload(request, session_dir, name)
+    async def upload_file(session_id: str, name: str, request: Request) -> FileOut:
+        # Parsed by hand: a path that isn't a UUID names no session (404, not 422).
         try:
-            return await run_in_threadpool(store_upload, session_id, name, upload)
+            sid = uuid.UUID(session_id)
+        except ValueError:
+            sid = None
+        if sid is None or not await run_in_threadpool(session_exists, sid):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Session {session_id} not found.")
+        if name not in UPLOADED_FILE_NAMES:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"{name!r} is not a session file; expected one of "
+                f"{', '.join(sorted(UPLOADED_FILE_NAMES))}.",
+            )
+        declared_sha256 = request.headers.get("X-Content-SHA256")
+        if declared_sha256 is None or not SHA256_HEX.fullmatch(declared_sha256):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "X-Content-SHA256 must be the body's SHA-256 as 64 lowercase hex characters.",
+            )
+
+        upload = await receive_upload(request, data_dir / "sessions" / str(sid), name)
+        try:
+            return await run_in_threadpool(store_upload, sid, name, upload)
         finally:
             upload.discard()
 

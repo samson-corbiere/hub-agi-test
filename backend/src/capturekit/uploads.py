@@ -2,11 +2,17 @@
 
 import hashlib
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from starlette.requests import Request
+
+# The only files a session uploads (meta.json is the POST /sessions body).
+UPLOADED_FILE_NAMES = frozenset({"video.mp4", "imu.csv", "frames.csv"})
+
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass
