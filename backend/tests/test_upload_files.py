@@ -3,6 +3,7 @@
 import hashlib
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx2
 import pytest
@@ -479,3 +480,53 @@ def registered_live(live_server, example_meta):
         return base_url, EXAMPLE_ID
 
     return start
+
+
+def backends_waiting_on_a_lock(engine) -> int:
+    with engine.connect() as conn:
+        return conn.scalar(
+            text(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            )
+        )
+
+
+def test_concurrent_identical_uploads_store_the_file_once(
+    registered_live, engine, db, data_dir, example_files
+):
+    # Retries can overlap (a URLSession retry while the first attempt is still running).
+    # To make them overlap for sure, the test holds a lock on the file's row until every
+    # upload has streamed its body and is blocked in the database, then lets them all go.
+    base_url, session_id = registered_live()
+    body = example_files["video.mp4"]
+    uploads = 4
+
+    def upload():
+        return httpx2.put(
+            f"{base_url}/sessions/{session_id}/files/video.mp4",
+            content=body,
+            headers={"X-Content-SHA256": sha256(body)},
+            timeout=30,
+        )
+
+    with engine.connect() as blocker, ThreadPoolExecutor(uploads) as pool:
+        blocker.execute(
+            text(
+                "SELECT 1 FROM session_files WHERE session_id = :id AND name = 'video.mp4' "
+                "FOR UPDATE"
+            ),
+            {"id": session_id},
+        )
+        pending = [pool.submit(upload) for _ in range(uploads)]
+        all_blocked = wait_until(lambda: backends_waiting_on_a_lock(engine) == uploads)
+        blocker.rollback()
+        responses = [future.result() for future in pending]
+    assert all_blocked, "the uploads never all reached the database together"
+
+    assert sorted(r.status_code for r in responses) == [200] * (uploads - 1) + [201]
+    assert len({r.json()["received_at"] for r in responses}) == 1
+    row = file_row(db, "video.mp4", session_id)
+    assert row["status"] == "received"
+    assert row["size"] == len(body)
+    assert stored_files(data_dir) == {f"sessions/{session_id}/video.mp4": body}
