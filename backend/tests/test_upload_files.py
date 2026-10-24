@@ -70,3 +70,74 @@ def test_valid_file_is_received(client, db, data_dir, registered, example_files,
     assert row["received_at"] is not None
 
     assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/{name}": body}
+
+
+def all_file_rows(db):
+    return (
+        db.execute(text("SELECT * FROM session_files ORDER BY session_id, name")).mappings().all()
+    )
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["0b6f6a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "not-a-uuid"],
+    ids=["unknown uuid", "not a uuid"],
+)
+def test_unknown_session_is_not_found(client, db, data_dir, registered, example_files, session_id):
+    files_before = all_file_rows(db)
+
+    response = put_file(client, "imu.csv", example_files["imu.csv"], session_id=session_id)
+
+    assert response.status_code == 404
+    assert isinstance(response.json()["detail"], str)
+    assert all_file_rows(db) == files_before
+    assert stored_files(data_dir) == {}
+
+
+def test_unknown_session_wins_over_a_bad_name(client, data_dir):
+    response = put_file(client, "evil.sh", b"x", session_id="0b6f6a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b")
+
+    assert response.status_code == 404
+    assert stored_files(data_dir) == {}
+
+
+@pytest.mark.parametrize("name", ["meta.json", "evil.sh", "VIDEO.MP4", "imu.csv.part", ".imu.csv"])
+def test_name_not_an_uploaded_file_is_rejected(client, db, data_dir, registered, name):
+    files_before = all_file_rows(db)
+
+    response = put_file(client, name, b"payload")
+
+    assert response.status_code == 400
+    assert isinstance(response.json()["detail"], str)
+    assert all_file_rows(db) == files_before
+    assert stored_files(data_dir) == {}
+
+
+IMU_SHA = "e6877f3da50f05ed3807afc68ee413f7847fde736f8e444b9abfa42bb05e20d6"
+MALFORMED_HEADERS = {
+    "missing": None,
+    "empty": "",
+    "uppercase": IMU_SHA.upper(),
+    "63 chars": IMU_SHA[:-1],
+    "65 chars": IMU_SHA + "a",
+    "not hex": "g" + IMU_SHA[1:],
+}
+
+
+@pytest.mark.parametrize("header", MALFORMED_HEADERS.values(), ids=MALFORMED_HEADERS.keys())
+def test_missing_or_malformed_hash_header_is_rejected(
+    client, db, data_dir, registered, example_files, header
+):
+    files_before = all_file_rows(db)
+    headers = {"Content-Type": "application/octet-stream"}
+    if header is not None:
+        headers["X-Content-SHA256"] = header
+
+    response = client.put(
+        f"/sessions/{EXAMPLE_ID}/files/imu.csv", content=example_files["imu.csv"], headers=headers
+    )
+
+    assert response.status_code == 400
+    assert isinstance(response.json()["detail"], str)
+    assert all_file_rows(db) == files_before
+    assert stored_files(data_dir) == {}
