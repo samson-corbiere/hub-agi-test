@@ -131,9 +131,18 @@ def create_app(database_url: str | None = None, data_dir: Path | None = None) ->
 
     def store_upload(
         session_id: uuid.UUID, name: str, header_sha256: str, upload: Upload
-    ) -> FileOut:
+    ) -> tuple[FileOut, bool]:
+        """Record the upload and move it into place. Returns (file, newly received)."""
         with make_db_session() as db:
             file = db.get_one(SessionFile, (session_id, name))
+            if file.status == FileStatus.RECEIVED:
+                if upload.sha256 != file.sha256:
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT,
+                        f"{name} was already received with SHA-256 {file.sha256}; "
+                        f"this upload's SHA-256 is {upload.sha256}.",
+                    )
+                return FileOut.from_model(file), False
             if upload.sha256 != header_sha256 or upload.sha256 != file.sha256:
                 file.status = FileStatus.CORRUPT
                 db.commit()
@@ -149,14 +158,27 @@ def create_app(database_url: str | None = None, data_dir: Path | None = None) ->
             file.received_at = func.now()
             db.commit()
             db.refresh(file)
-            return FileOut.from_model(file)
+            return FileOut.from_model(file), True
 
     def session_exists(session_id: uuid.UUID) -> bool:
         with make_db_session() as db:
             return db.get(CaptureSession, session_id) is not None
 
-    @app.put("/sessions/{session_id}/files/{name}", status_code=status.HTTP_201_CREATED)
-    async def upload_file(session_id: str, name: str, request: Request) -> FileOut:
+    @app.put(
+        "/sessions/{session_id}/files/{name}",
+        status_code=status.HTTP_201_CREATED,
+        responses={
+            200: {"description": "Already received with this exact content; not rewritten"},
+            400: {"description": "Not a session file name, or bad X-Content-SHA256"},
+            404: {"description": "Unknown session"},
+            409: {"description": "Already received with different content"},
+            413: {"description": "Body larger than the limit"},
+            422: {"description": "Body doesn't match X-Content-SHA256 or meta.json"},
+        },
+    )
+    async def upload_file(
+        session_id: str, name: str, request: Request, response: Response
+    ) -> FileOut:
         # Parsed by hand: a path that isn't a UUID names no session (404, not 422).
         try:
             sid = uuid.UUID(session_id)
@@ -179,8 +201,11 @@ def create_app(database_url: str | None = None, data_dir: Path | None = None) ->
 
         upload = await receive_upload(request, data_dir / "sessions" / str(sid), name)
         try:
-            return await run_in_threadpool(store_upload, sid, name, header_sha256, upload)
+            file, created = await run_in_threadpool(store_upload, sid, name, header_sha256, upload)
         finally:
             upload.discard()
+        if not created:
+            response.status_code = status.HTTP_200_OK
+        return file
 
     return app
