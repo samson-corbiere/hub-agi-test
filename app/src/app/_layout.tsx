@@ -1,18 +1,25 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
+import { NativeTabs } from 'expo-router/native-tabs';
 import { useColorScheme } from 'react-native';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
-
-SplashScreen.preventAutoHideAsync();
-
-export default function TabLayout() {
+export default function RootLayout() {
   const colorScheme = useColorScheme();
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
+      <NativeTabs>
+        <NativeTabs.Trigger name="index">
+          <NativeTabs.Trigger.Label>Capture</NativeTabs.Trigger.Label>
+          <NativeTabs.Trigger.Icon sf={{ default: 'camera', selected: 'camera.fill' }} />
+        </NativeTabs.Trigger>
+        <NativeTabs.Trigger name="sessions">
+          <NativeTabs.Trigger.Label>Sessions</NativeTabs.Trigger.Label>
+          <NativeTabs.Trigger.Icon sf="list.bullet" />
+        </NativeTabs.Trigger>
+        <NativeTabs.Trigger name="settings">
+          <NativeTabs.Trigger.Label>Settings</NativeTabs.Trigger.Label>
+          <NativeTabs.Trigger.Icon sf={{ default: 'gearshape', selected: 'gearshape.fill' }} />
+        </NativeTabs.Trigger>
+      </NativeTabs>
     </ThemeProvider>
   );
 }

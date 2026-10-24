@@ -1,27 +1,22 @@
 {
   "expo": {
-    "name": "app",
-    "slug": "app",
+    "name": "CaptureKit",
+    "slug": "capturekit",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "app",
+    "scheme": "capturekit",
     "userInterfaceStyle": "automatic",
+    "platforms": ["ios"],
     "ios": {
-      "icon": "./assets/expo.icon"
-    },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false
-    },
-    "web": {
-      "output": "server",
-      "favicon": "./assets/images/favicon.png"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.samsoncorbiere.capturekit",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "CaptureKit records video from the back camera, paired with motion data.",
+        "NSMotionUsageDescription": "CaptureKit records motion-sensor data in sync with the video.",
+        "UISupportedInterfaceOrientations": ["UIInterfaceOrientationPortrait"]
+      }
     },
     "plugins": [
       "expo-router",
@@ -31,6 +26,14 @@
           "backgroundColor": "#208AEF",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
         }
       ]
     ],
