@@ -210,9 +210,12 @@ def create_app(
                 status.HTTP_400_BAD_REQUEST,
                 "X-Content-SHA256 must be the body's SHA-256 as 64 lowercase hex characters.",
             )
+        # Closing the connection stops the client from sending the rest of the body
+        # (otherwise the server keeps reading it to reach the next request).
         too_large = HTTPException(
             status.HTTP_413_CONTENT_TOO_LARGE,
             f"{name} is larger than the {max_file_size}-byte limit.",
+            headers={"Connection": "close"},
         )
         content_length = request.headers.get("Content-Length")
         if content_length is not None:
