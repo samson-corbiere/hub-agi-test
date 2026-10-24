@@ -66,3 +66,17 @@ def test_replaying_the_same_registration_changes_nothing(client, db, example_met
     assert replay.json() == first.json()
     assert session_rows(db) == sessions_before
     assert file_rows(db) == files_before
+
+
+def test_same_session_id_with_different_metadata_is_a_conflict(client, db, example_meta):
+    client.post("/sessions", json=example_meta)
+    sessions_before = session_rows(db)
+    files_before = file_rows(db)
+    changed = {**example_meta, "interrupted": True}
+
+    response = client.post("/sessions", json=changed)
+
+    assert response.status_code == 409
+    assert isinstance(response.json()["detail"], str)
+    assert session_rows(db) == sessions_before
+    assert file_rows(db) == files_before
