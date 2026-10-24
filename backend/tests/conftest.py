@@ -37,7 +37,16 @@ def _test_database_url() -> str:
 
 
 @pytest.fixture(scope="session")
-def database_url():
+def alembic_config():
+    """Alembic, pointed at the test database."""
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    config.set_main_option("sqlalchemy.url", _test_database_url())
+    return config
+
+
+@pytest.fixture(scope="session")
+def database_url(alembic_config):
     url = _test_database_url()
     engine = create_engine(url)
     with engine.begin() as conn:
@@ -45,10 +54,7 @@ def database_url():
         conn.execute(text("CREATE SCHEMA public"))
     engine.dispose()
 
-    config = Config(str(BACKEND_DIR / "alembic.ini"))
-    config.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
-    config.set_main_option("sqlalchemy.url", url)
-    command.upgrade(config, "head")
+    command.upgrade(alembic_config, "head")
     return url
 
 
