@@ -1,6 +1,7 @@
 """The CaptureKit ingest API (docs/api-contract.md)."""
 
 import uuid
+from pathlib import Path
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -19,8 +20,9 @@ from capturekit.models import CaptureSession, FileStatus, SessionFile
 from capturekit.schemas import SessionOut
 
 
-def create_app(database_url: str | None = None) -> FastAPI:
+def create_app(database_url: str | None = None, data_dir: Path | None = None) -> FastAPI:
     engine = create_engine(database_url or config.database_url())
+    data_dir = data_dir or config.data_dir()
     make_db_session = sessionmaker(engine, expire_on_commit=False)
 
     @asynccontextmanager

@@ -20,6 +20,7 @@ from capturekit.config import REPO_DIR
 
 BACKEND_DIR = REPO_DIR / "backend"
 EXAMPLE_DIR = REPO_DIR / "contract" / "example-session"
+UPLOADED_NAMES = ("video.mp4", "imu.csv", "frames.csv")
 
 
 def _test_database_url() -> str:
@@ -80,10 +81,22 @@ def db(engine):
 
 
 @pytest.fixture
-def client(database_url, db):
-    app = create_app(database_url=database_url)
+def data_dir(tmp_path):
+    """DATA_DIR for this test: where the API stores received files."""
+    return tmp_path / "data"
+
+
+@pytest.fixture
+def client(database_url, db, data_dir):
+    app = create_app(database_url=database_url, data_dir=data_dir)
     with TestClient(app) as client:
         yield client
+
+
+@pytest.fixture
+def example_files():
+    """The contract's example files as {name: bytes}, as the app uploads them."""
+    return {name: (EXAMPLE_DIR / name).read_bytes() for name in UPLOADED_NAMES}
 
 
 @pytest.fixture
