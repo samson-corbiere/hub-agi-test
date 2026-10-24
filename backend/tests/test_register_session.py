@@ -1,7 +1,12 @@
 """POST /sessions: register a session from its meta.json (docs/api-contract.md)."""
 
+import json
+
 import pytest
-from sqlalchemy import text
+from fastapi.testclient import TestClient
+from sqlalchemy import make_url, text
+
+from capturekit.app import create_app
 
 EXAMPLE_ID = "3f1c2a4e-8b7d-4c6a-9e2f-1a2b3c4d5e6f"
 
@@ -83,6 +88,28 @@ def test_same_session_id_with_different_metadata_is_a_conflict(client, db, examp
     assert file_rows(db) == files_before
 
 
+def test_replay_is_recognised_for_numbers_postgres_normalises(client, db, example_meta):
+    # jsonb stores 1.2345e22 as 12345000000000000000000: an exact comparison must not
+    # mistake the identical replay for different metadata.
+    intrinsics = example_meta["camera_intrinsics"]
+    meta = {
+        **example_meta,
+        "camera_intrinsics": {
+            **intrinsics,
+            "matrix": [[1.2345e22, 0.0, 0.5], *intrinsics["matrix"][1:]],
+        },
+    }
+    first = client.post("/sessions", json=meta)
+    assert first.status_code == 201
+
+    replay = client.post("/sessions", json=meta)
+
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert len(session_rows(db)) == 1
+    assert len(file_rows(db)) == 3
+
+
 def without(meta, key):
     return {k: v for k, v in meta.items() if k != key}
 
@@ -122,6 +149,57 @@ def test_body_violating_the_schema_is_rejected(client, db, example_meta, make_bo
     assert isinstance(response.json()["detail"], str)
     assert session_rows(db) == []
     assert file_rows(db) == []
+
+
+# Bodies the JSON Schema accepts but Postgres cannot store. They must be a 422 (the app
+# doesn't retry it), never a 5xx (the app retries a request that can never succeed).
+UNSTORABLE_BODIES = {
+    "NUL character in a string": lambda m: {**m, "device_model": "a\u0000b"},
+    "integer above BIGINT": lambda m: with_files(
+        m, [{**m["files"][0], "size": 2**63}, *m["files"][1:]]
+    ),
+    "integer above int64 in a timestamp": lambda m: {**m, "video_end_t_ns": 2**63},
+}
+
+
+@pytest.mark.parametrize("make_body", UNSTORABLE_BODIES.values(), ids=UNSTORABLE_BODIES.keys())
+def test_body_postgres_cannot_store_is_rejected(client, db, example_meta, make_body):
+    response = client.post("/sessions", json=make_body(example_meta))
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+    assert session_rows(db) == []
+    assert file_rows(db) == []
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity", "1e400"])
+def test_non_finite_number_is_rejected(client, db, example_meta, literal):
+    # Python's JSON parser accepts these; JSON and jsonb do not.
+    # The matrix entries are unbounded numbers, so only finiteness can reject them.
+    intrinsics = example_meta["camera_intrinsics"]
+    matrix = [["PLACEHOLDER", 0.0, 0.5], *intrinsics["matrix"][1:]]
+    meta = {**example_meta, "camera_intrinsics": {**intrinsics, "matrix": matrix}}
+    body = json.dumps(meta).replace('"PLACEHOLDER"', literal)
+
+    response = client.post(
+        "/sessions", content=body.encode(), headers={"Content-Type": "application/json"}
+    )
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+    assert session_rows(db) == []
+
+
+def test_unexpected_server_error_returns_json_detail(database_url, example_meta):
+    # A database that can't be reached stands in for any unexpected failure.
+    unreachable = make_url(database_url).set(port=1)
+    app = create_app(database_url=unreachable.render_as_string(hide_password=False))
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/sessions", json=example_meta)
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    assert isinstance(response.json()["detail"], str)
 
 
 def test_body_that_is_not_json_is_rejected(client, db):
