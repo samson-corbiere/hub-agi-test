@@ -19,10 +19,21 @@ from capturekit import config
 from capturekit.meta import InvalidMeta, describe_location, validate_meta
 from capturekit.models import CaptureSession, FileStatus, SessionFile
 from capturekit.schemas import FileOut, SessionOut
-from capturekit.uploads import SHA256_HEX, UPLOADED_FILE_NAMES, Upload, receive_upload
+from capturekit.uploads import (
+    MAX_FILE_SIZE,
+    SHA256_HEX,
+    UPLOADED_FILE_NAMES,
+    Upload,
+    receive_upload,
+)
 
 
-def create_app(database_url: str | None = None, data_dir: Path | None = None) -> FastAPI:
+def create_app(
+    database_url: str | None = None,
+    data_dir: Path | None = None,
+    max_file_size: int = MAX_FILE_SIZE,
+) -> FastAPI:
+    """The API. data_dir defaults to DATA_DIR; max_file_size is lowered by tests."""
     engine = create_engine(database_url or config.database_url())
     data_dir = data_dir or config.data_dir()
     make_db_session = sessionmaker(engine, expire_on_commit=False)

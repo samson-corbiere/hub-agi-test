@@ -3,7 +3,10 @@
 import hashlib
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import text
+
+from capturekit.app import create_app
 
 EXAMPLE_ID = "3f1c2a4e-8b7d-4c6a-9e2f-1a2b3c4d5e6f"
 
@@ -247,5 +250,92 @@ def test_garbled_replay_of_a_received_file_is_a_conflict(
     response = corrupt_upload(client, "imu.csv", body)
 
     assert response.status_code == 409
+    assert file_row(db, "imu.csv") == row_before
+    assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/imu.csv": body}
+
+
+# The real limit is 1 GB; tests lower it so they never send that much. The example's
+# imu.csv is exactly at this limit and video.mp4 is above it.
+SMALL_LIMIT = 7462
+
+
+@pytest.fixture
+def small_limit_client(database_url, db, data_dir):
+    app = create_app(database_url=database_url, data_dir=data_dir, max_file_size=SMALL_LIMIT)
+    with TestClient(app) as client:
+        yield client
+
+
+@pytest.mark.parametrize(
+    ("content_length", "expected_status"),
+    [(1_000_000_001, 413), (1_000_000_000, 201)],
+    ids=["1 GB + 1 byte", "exactly 1 GB"],
+)
+def test_default_limit_is_one_gigabyte(
+    client, registered, example_files, content_length, expected_status
+):
+    # Only the declared Content-Length is large: the test client doesn't check it against
+    # the body, so the default limit is exercised without sending a gigabyte.
+    body = example_files["frames.csv"]
+
+    response = put_file(client, "frames.csv", body, headers={"Content-Length": str(content_length)})
+
+    assert response.status_code == expected_status
+
+
+def test_body_over_the_limit_is_rejected(
+    small_limit_client, db, data_dir, registered, example_files
+):
+    files_before = all_file_rows(db)
+
+    response = put_file(small_limit_client, "video.mp4", example_files["video.mp4"])
+
+    assert response.status_code == 413
+    assert isinstance(response.json()["detail"], str)
+    assert all_file_rows(db) == files_before
+    assert stored_files(data_dir) == {}
+
+
+def test_body_at_the_limit_is_accepted(small_limit_client, registered, example_files):
+    body = example_files["imu.csv"]
+    assert len(body) == SMALL_LIMIT
+
+    response = put_file(small_limit_client, "imu.csv", body)
+
+    assert response.status_code == 201
+
+
+def test_body_over_the_limit_without_content_length_is_rejected(
+    small_limit_client, db, data_dir, registered, example_files
+):
+    # A generator body is sent with chunked transfer encoding: no Content-Length, so the
+    # limit can only be enforced while streaming.
+    body = example_files["video.mp4"]
+
+    def chunks():
+        for start in range(0, len(body), 1024):
+            yield body[start : start + 1024]
+
+    response = small_limit_client.put(
+        f"/sessions/{EXAMPLE_ID}/files/video.mp4",
+        content=chunks(),
+        headers={"X-Content-SHA256": sha256(body)},
+    )
+
+    assert response.status_code == 413
+    assert file_row(db, "video.mp4")["status"] == "expected"
+    assert stored_files(data_dir) == {}
+
+
+def test_size_limit_is_checked_before_already_received(
+    small_limit_client, db, data_dir, registered, example_files
+):
+    body = example_files["imu.csv"]
+    assert put_file(small_limit_client, "imu.csv", body).status_code == 201
+    row_before = file_row(db, "imu.csv")
+
+    response = put_file(small_limit_client, "imu.csv", body + b"0")
+
+    assert response.status_code == 413
     assert file_row(db, "imu.csv") == row_before
     assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/imu.csv": body}

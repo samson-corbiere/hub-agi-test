@@ -14,6 +14,9 @@ UPLOADED_FILE_NAMES = frozenset({"video.mp4", "imu.csv", "frames.csv"})
 
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
+# Largest accepted file body: 1 GB, in decimal bytes (docs/api-contract.md).
+MAX_FILE_SIZE = 1_000_000_000
+
 
 @dataclass
 class Upload:
