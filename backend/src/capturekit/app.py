@@ -9,15 +9,17 @@ from typing import Annotated, Any
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import cast, create_engine, insert, select
+from sqlalchemy import cast, create_engine, func, insert, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.concurrency import run_in_threadpool
 
 from capturekit import config
 from capturekit.meta import InvalidMeta, describe_location, validate_meta
 from capturekit.models import CaptureSession, FileStatus, SessionFile
-from capturekit.schemas import SessionOut
+from capturekit.schemas import FileOut, SessionOut
+from capturekit.uploads import Upload, receive_upload
 
 
 def create_app(database_url: str | None = None, data_dir: Path | None = None) -> FastAPI:
@@ -126,5 +128,25 @@ def create_app(database_url: str | None = None, data_dir: Path | None = None) ->
 
         session = db.get_one(CaptureSession, session_id)
         return SessionOut.from_model(session)
+
+    def store_upload(session_id: uuid.UUID, name: str, upload: Upload) -> FileOut:
+        with make_db_session() as db:
+            file = db.get_one(SessionFile, (session_id, name))
+            upload.move_to(data_dir / "sessions" / str(session_id) / name)
+            file.status = FileStatus.RECEIVED
+            file.size = upload.size
+            file.received_at = func.now()
+            db.commit()
+            db.refresh(file)
+            return FileOut.from_model(file)
+
+    @app.put("/sessions/{session_id}/files/{name}", status_code=status.HTTP_201_CREATED)
+    async def upload_file(session_id: uuid.UUID, name: str, request: Request) -> FileOut:
+        session_dir = data_dir / "sessions" / str(session_id)
+        upload = await receive_upload(request, session_dir, name)
+        try:
+            return await run_in_threadpool(store_upload, session_id, name, upload)
+        finally:
+            upload.discard()
 
     return app
