@@ -1,6 +1,5 @@
 """The CaptureKit ingest API (docs/api-contract.md)."""
 
-import contextlib
 import uuid
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
@@ -10,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import cast, create_engine, func, insert, select
+from sqlalchemy import cast, create_engine, insert, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
@@ -24,9 +23,10 @@ from capturekit.uploads import (
     MAX_FILE_SIZE,
     SHA256_HEX,
     UPLOADED_FILE_NAMES,
+    AlreadyReceivedDifferently,
     BodyTooLarge,
-    Upload,
-    receive_upload,
+    CorruptUpload,
+    FileStore,
 )
 
 
@@ -39,6 +39,7 @@ def create_app(
     engine = create_engine(database_url or config.database_url())
     data_dir = data_dir or config.data_dir()
     make_db_session = sessionmaker(engine, expire_on_commit=False)
+    files = FileStore(data_dir, make_db_session, max_file_size)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -142,39 +143,6 @@ def create_app(
         session = db.get_one(CaptureSession, session_id)
         return SessionOut.from_model(session)
 
-    def store_upload(
-        session_id: uuid.UUID, name: str, header_sha256: str, upload: Upload
-    ) -> tuple[FileOut, bool]:
-        """Record the upload and move it into place. Returns (file, newly received)."""
-        with make_db_session() as db:
-            # The row lock serialises concurrent uploads of the same file: the first one
-            # moves its file into place and commits, the others then see it received.
-            file = db.get_one(SessionFile, (session_id, name), with_for_update=True)
-            if file.status == FileStatus.RECEIVED:
-                if upload.sha256 != file.sha256:
-                    raise HTTPException(
-                        status.HTTP_409_CONFLICT,
-                        f"{name} was already received with SHA-256 {file.sha256}; "
-                        f"this upload's SHA-256 is {upload.sha256}.",
-                    )
-                return FileOut.from_model(file), False
-            if upload.sha256 != header_sha256 or upload.sha256 != file.sha256:
-                file.status = FileStatus.CORRUPT
-                db.commit()
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    f"{name} is corrupt: received SHA-256 {upload.sha256}, but the "
-                    f"X-Content-SHA256 header says {header_sha256} and meta.json "
-                    f"declares {file.sha256}.",
-                )
-            upload.move_to(data_dir / "sessions" / str(session_id) / name)
-            file.status = FileStatus.RECEIVED
-            file.size = upload.size
-            file.received_at = func.now()
-            db.commit()
-            db.refresh(file)
-            return FileOut.from_model(file), True
-
     def session_exists(session_id: uuid.UUID) -> bool:
         with make_db_session() as db:
             return db.get(CaptureSession, session_id) is not None
@@ -228,17 +196,17 @@ def create_app(
                 raise too_large
 
         try:
-            upload = await receive_upload(
-                request, data_dir / "sessions" / str(sid), name, max_file_size
-            )
+            upload = await files.receive(request, sid, name)
         except BodyTooLarge:
             raise too_large from None
         try:
-            file, created = await run_in_threadpool(store_upload, sid, name, header_sha256, upload)
+            file, created = await run_in_threadpool(files.store, sid, name, header_sha256, upload)
+        except AlreadyReceivedDifferently as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+        except CorruptUpload as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
         finally:
-            upload.discard()
-            with contextlib.suppress(OSError):  # not empty: other files live there
-                upload.path.parent.rmdir()
+            await run_in_threadpool(files.discard, upload.path)
         if not created:
             response.status_code = status.HTTP_200_OK
         return file
