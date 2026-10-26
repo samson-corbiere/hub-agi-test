@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "CaptureKit",
+    "slug": "capturekit",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "capturekit",
+    "userInterfaceStyle": "automatic",
+    "platforms": ["ios"],
+    "ios": {
+      "bundleIdentifier": "com.samsoncorbiere.capturekit",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "CaptureKit records video from the back camera, paired with motion data.",
+        "NSMotionUsageDescription": "CaptureKit records motion-sensor data in sync with the video.",
+        "UISupportedInterfaceOrientations": ["UIInterfaceOrientationPortrait"]
+      }
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
