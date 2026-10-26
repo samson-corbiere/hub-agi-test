@@ -1,3 +1,5 @@
+import { describe, expect, it } from '@jest/globals';
+
 import { captureScreen } from './capture-screen';
 
 describe('captureScreen', () => {
