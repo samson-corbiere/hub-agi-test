@@ -1,5 +1,6 @@
 """The CaptureKit ingest API (docs/api-contract.md)."""
 
+import contextlib
 import uuid
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
@@ -236,6 +237,8 @@ def create_app(
             file, created = await run_in_threadpool(store_upload, sid, name, header_sha256, upload)
         finally:
             upload.discard()
+            with contextlib.suppress(OSError):  # not empty: other files live there
+                upload.path.parent.rmdir()
         if not created:
             response.status_code = status.HTTP_200_OK
         return file
