@@ -124,10 +124,13 @@ def live_server(database_url, db, data_dir):
 
     yield start
 
-    for server, thread, sock in running:
+    for server, _, _ in running:
         server.should_exit = True
+    for _, thread, sock in running:
         thread.join(timeout=10)
         sock.close()
+    stuck = [thread.name for _, thread, _ in running if thread.is_alive()]
+    assert not stuck, f"live server threads did not exit: {stuck}"
 
 
 @pytest.fixture

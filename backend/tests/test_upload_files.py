@@ -482,51 +482,141 @@ def registered_live(live_server, example_meta):
     return start
 
 
-def backends_waiting_on_a_lock(engine) -> int:
-    with engine.connect() as conn:
-        return conn.scalar(
-            text(
-                "SELECT count(*) FROM pg_stat_activity "
-                "WHERE datname = current_database() AND wait_event_type = 'Lock'"
-            )
+# --- Concurrent uploads of the same file ---
+# Retries can overlap (a URLSession retry while the first attempt is still running). To
+# make requests overlap for sure, the test locks the file's row itself, lets the uploads
+# stream their bodies and queue up behind that lock, then releases it.
+
+
+class RowLock:
+    """A lock on one session_files row, held by the test on its own connection."""
+
+    def __init__(self, conn, session_id, name):
+        self.conn = conn
+        conn.execute(
+            text("SELECT 1 FROM session_files WHERE session_id = :id AND name = :name FOR UPDATE"),
+            {"id": session_id, "name": name},
         )
+        self.pid = conn.scalar(text("SELECT pg_backend_pid()"))
+
+    def waiters(self, engine) -> int:
+        """How many backends are queued, directly or not, behind this lock.
+
+        Only backends blocked by this test's connection count, so other tests running
+        against the same database don't disturb it.
+        """
+        with engine.connect() as conn:
+            return conn.scalar(
+                text(
+                    "WITH RECURSIVE blocked(pid) AS ("
+                    "  SELECT pid FROM pg_stat_activity"
+                    "  WHERE CAST(:pid AS int) = ANY(pg_blocking_pids(pid))"
+                    "  UNION"
+                    "  SELECT a.pid FROM pg_stat_activity a, blocked b"
+                    "  WHERE b.pid = ANY(pg_blocking_pids(a.pid))"
+                    ") SELECT count(*) FROM blocked"
+                ),
+                {"pid": self.pid},
+            )
+
+    def release(self):
+        self.conn.rollback()
+
+
+def queue_uploads(engine, session_id, name, uploads):
+    """Run the uploads (callables) so they all wait on the file's row, queued in order.
+
+    Postgres hands a row lock to its waiters first come, first served, so each upload is
+    started only once the previous one is queued. Returns their responses, in order.
+    """
+    with engine.connect() as conn, ThreadPoolExecutor(len(uploads)) as pool:
+        lock = RowLock(conn, session_id, name)
+        pending = []
+        for queued, upload in enumerate(uploads, start=1):
+            pending.append(pool.submit(upload))
+            if not wait_until(lambda n=queued: lock.waiters(engine) == n):
+                lock.release()
+                pytest.fail(f"upload {queued} never queued up behind the row lock")
+        lock.release()
+        return [future.result() for future in pending]
+
+
+def uploader(base_url, session_id, name, body, sha=None):
+    def upload():
+        return httpx2.put(
+            f"{base_url}/sessions/{session_id}/files/{name}",
+            content=body,
+            headers={"X-Content-SHA256": sha or sha256(body)},
+            timeout=30,
+        )
+
+    return upload
 
 
 def test_concurrent_identical_uploads_store_the_file_once(
     registered_live, engine, db, data_dir, example_files
 ):
-    # Retries can overlap (a URLSession retry while the first attempt is still running).
-    # To make them overlap for sure, the test holds a lock on the file's row until every
-    # upload has streamed its body and is blocked in the database, then lets them all go.
     base_url, session_id = registered_live()
     body = example_files["video.mp4"]
-    uploads = 4
+    upload = uploader(base_url, session_id, "video.mp4", body)
 
-    def upload():
-        return httpx2.put(
-            f"{base_url}/sessions/{session_id}/files/video.mp4",
-            content=body,
-            headers={"X-Content-SHA256": sha256(body)},
-            timeout=30,
-        )
+    responses = queue_uploads(engine, session_id, "video.mp4", [upload] * 4)
 
-    with engine.connect() as blocker, ThreadPoolExecutor(uploads) as pool:
-        blocker.execute(
-            text(
-                "SELECT 1 FROM session_files WHERE session_id = :id AND name = 'video.mp4' "
-                "FOR UPDATE"
-            ),
-            {"id": session_id},
-        )
-        pending = [pool.submit(upload) for _ in range(uploads)]
-        all_blocked = wait_until(lambda: backends_waiting_on_a_lock(engine) == uploads)
-        blocker.rollback()
-        responses = [future.result() for future in pending]
-    assert all_blocked, "the uploads never all reached the database together"
-
-    assert sorted(r.status_code for r in responses) == [200] * (uploads - 1) + [201]
+    assert [r.status_code for r in responses] == [201, 200, 200, 200]
     assert len({r.json()["received_at"] for r in responses}) == 1
     row = file_row(db, "video.mp4", session_id)
     assert row["status"] == "received"
     assert row["size"] == len(body)
     assert stored_files(data_dir) == {f"sessions/{session_id}/video.mp4": body}
+
+
+@pytest.mark.parametrize(
+    ("first", "expected_statuses"),
+    [("corrupt", [422, 201]), ("good", [201, 409])],
+    ids=["corrupt first", "good first"],
+)
+def test_corrupt_upload_racing_a_good_one(
+    registered_live, engine, db, data_dir, example_files, first, expected_statuses
+):
+    base_url, session_id = registered_live()
+    body = example_files["imu.csv"]
+    good = uploader(base_url, session_id, "imu.csv", body)
+    corrupt = uploader(base_url, session_id, "imu.csv", damaged(body), sha=sha256(body))
+    order = [corrupt, good] if first == "corrupt" else [good, corrupt]
+
+    responses = queue_uploads(engine, session_id, "imu.csv", order)
+
+    assert [r.status_code for r in responses] == expected_statuses
+    row = file_row(db, "imu.csv", session_id)
+    assert row["status"] == "received"
+    assert row["size"] == len(body)
+    assert stored_files(data_dir) == {f"sessions/{session_id}/imu.csv": body}
+
+
+@pytest.mark.parametrize(
+    ("first", "expected_statuses"),
+    [("other", [422, 201]), ("declared", [201, 409])],
+    ids=["other content first", "declared content first"],
+)
+def test_concurrent_uploads_with_different_content(
+    registered_live, engine, db, data_dir, example_files, first, expected_statuses
+):
+    # Both requests are self-consistent (header == body hash). Only the content meta.json
+    # declared can be stored: other content is corrupt (422) before the declared file
+    # arrives, and a conflict (409) after.
+    base_url, session_id = registered_live()
+    body = example_files["frames.csv"]
+    other = b"frame_index,t_ns\n0,1\n"
+    declared = uploader(base_url, session_id, "frames.csv", body)
+    different = uploader(base_url, session_id, "frames.csv", other)
+    order = [different, declared] if first == "other" else [declared, different]
+
+    responses = queue_uploads(engine, session_id, "frames.csv", order)
+
+    assert [r.status_code for r in responses] == expected_statuses
+    row = file_row(db, "frames.csv", session_id)
+    stored = stored_path(data_dir, "frames.csv", session_id).read_bytes()
+    assert row["status"] == "received"
+    assert (row["size"], row["sha256"]) == (len(stored), sha256(stored))
+    assert stored == body
+    assert stored_files(data_dir) == {f"sessions/{session_id}/frames.csv": body}
