@@ -7,15 +7,18 @@ public class CaptureModule: Module {
 
     // What the Capture screen shows (a CaptureReadiness raw value).
     Function("getReadiness") { () -> String in
-      SensorPermissions.readiness().rawValue
+      CameraPermissions.readiness().rawValue
     }
 
-    // Prompts for every permission not decided yet, then returns the new readiness.
+    // Prompts for the camera if not decided yet, then returns the new readiness.
     AsyncFunction("requestPermissions") { () async -> String in
-      await SensorPermissions.requestUndecided()
-      return SensorPermissions.readiness().rawValue
+      await CameraPermissions.requestIfUndecided()
+      return CameraPermissions.readiness().rawValue
     }
 
-    View(CameraPreviewView.self) {}
+    View(CameraPreviewView.self) {
+      // { message: String }: the camera could not be set up or stopped with an error.
+      Events("onCameraError")
+    }
   }
 }
