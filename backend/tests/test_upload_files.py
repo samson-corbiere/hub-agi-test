@@ -173,6 +173,26 @@ def test_body_not_matching_the_header_is_corrupt(client, db, data_dir, registere
     assert stored_files(data_dir) == {}
 
 
+def test_corrupt_first_upload_leaves_no_empty_session_directory(
+    client, data_dir, registered, example_files
+):
+    response = corrupt_upload(client, "video.mp4", example_files["video.mp4"])
+
+    assert response.status_code == 422
+    assert not (data_dir / "sessions" / EXAMPLE_ID).exists()
+
+
+def test_corrupt_upload_keeps_the_session_directory_of_received_files(
+    client, data_dir, registered, example_files
+):
+    assert put_file(client, "imu.csv", example_files["imu.csv"]).status_code == 201
+
+    response = corrupt_upload(client, "video.mp4", example_files["video.mp4"])
+
+    assert response.status_code == 422
+    assert stored_files(data_dir) == {f"sessions/{EXAMPLE_ID}/imu.csv": example_files["imu.csv"]}
+
+
 def test_body_not_matching_the_declared_hash_is_corrupt(client, db, data_dir, registered):
     # Self-consistent upload (header == body hash), but not the file meta.json declared.
     other = b"frame_index,t_ns\n0,1\n"
