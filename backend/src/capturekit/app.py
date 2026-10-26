@@ -3,6 +3,7 @@
 import uuid
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, status
@@ -12,16 +13,33 @@ from sqlalchemy import cast, create_engine, insert, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.concurrency import run_in_threadpool
 
 from capturekit import config
 from capturekit.meta import InvalidMeta, describe_location, validate_meta
 from capturekit.models import CaptureSession, FileStatus, SessionFile
-from capturekit.schemas import SessionOut
+from capturekit.schemas import FileOut, SessionOut
+from capturekit.uploads import (
+    MAX_FILE_SIZE,
+    SHA256_HEX,
+    UPLOADED_FILE_NAMES,
+    AlreadyReceivedDifferently,
+    BodyTooLarge,
+    CorruptUpload,
+    FileStore,
+)
 
 
-def create_app(database_url: str | None = None) -> FastAPI:
+def create_app(
+    database_url: str | None = None,
+    data_dir: Path | None = None,
+    max_file_size: int = MAX_FILE_SIZE,
+) -> FastAPI:
+    """The API. data_dir defaults to DATA_DIR; max_file_size is lowered by tests."""
     engine = create_engine(database_url or config.database_url())
+    data_dir = data_dir or config.data_dir()
     make_db_session = sessionmaker(engine, expire_on_commit=False)
+    files = FileStore(data_dir, make_db_session, max_file_size)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -124,5 +142,73 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
         session = db.get_one(CaptureSession, session_id)
         return SessionOut.from_model(session)
+
+    def session_exists(session_id: uuid.UUID) -> bool:
+        with make_db_session() as db:
+            return db.get(CaptureSession, session_id) is not None
+
+    @app.put(
+        "/sessions/{session_id}/files/{name}",
+        status_code=status.HTTP_201_CREATED,
+        responses={
+            200: {"description": "Already received with this exact content; not rewritten"},
+            400: {"description": "Not a session file name, or bad X-Content-SHA256"},
+            404: {"description": "Unknown session"},
+            409: {"description": "Already received with different content"},
+            413: {"description": "Body larger than the limit"},
+            422: {"description": "Body doesn't match X-Content-SHA256 or meta.json"},
+        },
+    )
+    async def upload_file(
+        session_id: str, name: str, request: Request, response: Response
+    ) -> FileOut:
+        # Parsed by hand: a path that isn't a UUID names no session (404, not 422).
+        try:
+            sid = uuid.UUID(session_id)
+        except ValueError:
+            sid = None
+        if sid is None or not await run_in_threadpool(session_exists, sid):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Session {session_id} not found.")
+        if name not in UPLOADED_FILE_NAMES:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"{name!r} is not a session file; expected one of "
+                f"{', '.join(sorted(UPLOADED_FILE_NAMES))}.",
+            )
+        header_sha256 = request.headers.get("X-Content-SHA256")
+        if header_sha256 is None or not SHA256_HEX.fullmatch(header_sha256):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "X-Content-SHA256 must be the body's SHA-256 as 64 lowercase hex characters.",
+            )
+        # Closing the connection stops the client from sending the rest of the body
+        # (otherwise the server keeps reading it to reach the next request).
+        too_large = HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"{name} is larger than the {max_file_size}-byte limit.",
+            headers={"Connection": "close"},
+        )
+        content_length = request.headers.get("Content-Length")
+        if content_length is not None:
+            if not (content_length.isascii() and content_length.isdigit()):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid Content-Length.")
+            if int(content_length) > max_file_size:
+                raise too_large
+
+        try:
+            upload = await files.receive(request, sid, name)
+        except BodyTooLarge:
+            raise too_large from None
+        try:
+            file, created = await run_in_threadpool(files.store, sid, name, header_sha256, upload)
+        except AlreadyReceivedDifferently as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+        except CorruptUpload as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
+        finally:
+            await run_in_threadpool(files.discard, upload.path)
+        if not created:
+            response.status_code = status.HTTP_200_OK
+        return file
 
     return app

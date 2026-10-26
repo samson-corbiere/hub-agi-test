@@ -15,3 +15,8 @@ def database_url() -> str:
     if not url:
         raise RuntimeError("DATABASE_URL is not set (see .env.example).")
     return url
+
+
+def data_dir() -> Path:
+    """Where received session files are stored. A relative path is relative to the cwd."""
+    return Path(os.environ.get("DATA_DIR") or "data")

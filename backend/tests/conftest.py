@@ -7,8 +7,12 @@ exercise the real schema. Every test then starts from empty tables.
 
 import json
 import os
+import socket
+import threading
+import time
 
 import pytest
+import uvicorn
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
@@ -20,6 +24,7 @@ from capturekit.config import REPO_DIR
 
 BACKEND_DIR = REPO_DIR / "backend"
 EXAMPLE_DIR = REPO_DIR / "contract" / "example-session"
+UPLOADED_NAMES = ("video.mp4", "imu.csv", "frames.csv")
 
 
 def _test_database_url() -> str:
@@ -80,10 +85,58 @@ def db(engine):
 
 
 @pytest.fixture
-def client(database_url, db):
-    app = create_app(database_url=database_url)
+def data_dir(tmp_path):
+    """DATA_DIR for this test: where the API stores received files."""
+    return tmp_path / "data"
+
+
+@pytest.fixture
+def client(database_url, db, data_dir):
+    app = create_app(database_url=database_url, data_dir=data_dir)
     with TestClient(app) as client:
         yield client
+
+
+@pytest.fixture
+def live_server(database_url, db, data_dir):
+    """Start the API under uvicorn on a free local port; returns its base URL.
+
+    TestClient reads a streamed request body whole before handing it to the app, so
+    tests about streaming use a real server and real sockets instead.
+    """
+    running = []
+
+    def start(**options) -> str:
+        app = create_app(database_url=database_url, data_dir=data_dir, **options)
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+        thread.start()
+        running.append((server, thread, sock))
+        deadline = time.monotonic() + 10
+        while not server.started:
+            if not thread.is_alive() or time.monotonic() > deadline:
+                pytest.fail("The live server did not start.")
+            time.sleep(0.01)
+        host, port = sock.getsockname()
+        return f"http://{host}:{port}"
+
+    yield start
+
+    for server, _, _ in running:
+        server.should_exit = True
+    for _, thread, sock in running:
+        thread.join(timeout=10)
+        sock.close()
+    stuck = [thread.name for _, thread, _ in running if thread.is_alive()]
+    assert not stuck, f"live server threads did not exit: {stuck}"
+
+
+@pytest.fixture
+def example_files():
+    """The contract's example files as {name: bytes}, as the app uploads them."""
+    return {name: (EXAMPLE_DIR / name).read_bytes() for name in UPLOADED_NAMES}
 
 
 @pytest.fixture

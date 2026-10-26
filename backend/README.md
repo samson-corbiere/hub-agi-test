@@ -4,7 +4,7 @@ FastAPI + Postgres ingest server for CaptureKit sessions. The API is specified i
 [`docs/api-contract.md`](../docs/api-contract.md); `meta.json` bodies are validated
 against [`contract/meta.schema.json`](../contract/meta.schema.json).
 
-Implemented so far: `GET /health`, `POST /sessions`.
+Implemented so far: `GET /health`, `POST /sessions`, `PUT /sessions/{session_id}/files/{name}`.
 
 ## Setup
 
@@ -21,7 +21,7 @@ Configuration is read from the environment, falling back to the repo-root `.env`
 |---|---|
 | `DATABASE_URL` | The API and `alembic` |
 | `TEST_DATABASE_URL` | The tests. Must name a database ending in `_test`: its schema is dropped and rebuilt on every test run. |
-| `DATA_DIR` | Where received files are stored (not used yet) |
+| `DATA_DIR` | Where received files are stored, as `<DATA_DIR>/sessions/<session_id>/<name>`. Defaults to `./data` (relative to the working directory; ignored by git from the repo root or `backend/`). |
 
 Compose creates both the dev database and `<POSTGRES_DB>_test` when its volume is first
 created (`infra/postgres/init/`).
@@ -57,7 +57,9 @@ uv run ruff format --check . ../contract
 
 Tests go through the HTTP API only, against a real Postgres test database. The schema
 is created by the Alembic migrations once per run, and every table is emptied before
-each test.
+each test. Each test gets its own temporary `DATA_DIR`. Tests about streamed bodies run
+the API under uvicorn on a free local port (`live_server` fixture), because FastAPI's
+`TestClient` reads a streamed request body whole before the app sees it.
 
 ## Migrations
 
