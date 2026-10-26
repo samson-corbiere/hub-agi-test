@@ -5,7 +5,11 @@ public enum SensorAccess: String, CaseIterable, Sendable {
 }
 
 /// What the Capture screen shows. The raw values are the strings React Native receives.
-public enum CaptureReadiness: String, Sendable {
+public enum CaptureReadiness: String, CaseIterable, Sendable {
+    public init(camera: SensorAccess) {
+        self = .ready
+    }
+
     /// Show the live camera preview.
     case ready
     /// Ask for the camera and/or motion permission.
