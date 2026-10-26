@@ -41,7 +41,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderRadius: 12,
-    backgroundColor: '#208AEF',
+    backgroundColor: '#007AFF',
   },
   buttonPressed: { opacity: 0.7 },
   buttonLabel: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },

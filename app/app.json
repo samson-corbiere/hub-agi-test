@@ -9,7 +9,6 @@
     "userInterfaceStyle": "automatic",
     "platforms": ["ios"],
     "ios": {
-      "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.samsoncorbiere.capturekit",
       "supportsTablet": false,
       "infoPlist": {
@@ -23,7 +22,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#000000",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
